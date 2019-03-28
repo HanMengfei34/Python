@@ -1,0 +1,552 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Mar 22 10:55:01 2019
+
+@author: 6
+"""
+
+import math
+import netCDF4
+import numpy as np  
+import os
+import matplotlib.pyplot as plt
+from mpl_toolkits.basemap import Basemap
+from PIL import Image
+import gc
+
+a=6378137.0;
+#地球参数
+π=math.pi;
+ρ = 206264.806247096355;
+depth=100
+img=Image.open('e:/python_data/img/glide.png') 
+data=netCDF4.Dataset(os.path.join('G:\\NWP_SWOTCO_1km\Output1\\NWP_SWOTCO_1km_his_00025.nc'))
+latitudes11 = data.variables['lat_u']
+longitudes11 = data.variables['lon_u']
+latitudes = data.variables['lat_u'][107:176,328:388]
+longitudes = data.variables['lon_u'][107:176,328:388]
+lons, lats = longitudes,latitudes
+#经纬度要在外面定义
+filelist=os.listdir(os.path.join(r'G:\NWP_SWOTCO_1km\Output1\\'))
+grid= [[0 for col in range(60)] for row in range(69)]
+w=0   
+v=np.zeros([69,60])
+u=np.zeros([69,60])
+vv=np.zeros([69,60])
+uu=np.zeros([69,60])
+vv[0][0]=0
+uu[0][0]=0
+def Read_data(w):    
+    global grid
+    global list_grid
+    global tempv
+    global list_gridv
+    list_gridv=[]
+    data=netCDF4.Dataset(r'G:\NWP_SWOTCO_1km\Output1\\'+filelist[w])
+    latitudes = data.variables['lat_u'][107:176,328:388]
+    longitudes = data.variables['lon_u'][107:176,328:388]
+    lons, lats = longitudes,latitudes
+#    v=np.zeros([69,60])
+#    u=np.zeros([69,60])
+#    vv=np.zeros([69,60])
+#    uu=np.zeros([69,60])
+#    vv[0][0]=0
+#    uu[0][0]=0
+    #K控制读多少层的数据
+    for k in range(44,50):  
+        tempv=data.variables['v'][0][k]
+        tempu=data.variables['u'][0][k]
+        for i in range(107,176):
+            for j in range(328,388):
+                if math.isnan(tempv[i][j]):
+                   v[i-107][j-328]=0
+                else:
+                   v[i-107][j-328]=tempv[i][j]
+                if math.isnan(tempu[i][j]):
+                   u[i-107][j-328]=0
+                else:
+                   u[i-107][j-328]=tempu[i][j]
+                vv[i-107][j-328]=vv[i-107][j-328]+v[i-107][j-328]/6.0
+                uu[i-107][j-328]=uu[i-107][j-328]+u[i-107][j-328]/6.0
+        for i in range(0,69):
+            for j in range(0,60):
+                if vv[i][j]>0.15:
+                    vv[i][j]=0.15
+                if uu[i][j]>0.15:
+                    uu[i][j]=0.15
+                if vv[i][j]<-0.15:
+                    vv[i][j]=-0.15
+                if uu[i][j]<-0.15:
+                    uu[i][j]=-0.15
+                grid[i][j]=math.sqrt(uu[i][j]*uu[i][j]+vv[i][j]*vv[i][j])
+                grid= np.array(grid) 
+                list_gridv.append([lons[i][j],lats[i][j],uu[i][j],vv[i][j]])  
+            
+def Power_Model(start_x,start_y,end_x,end_y,u,v,uu,vv):
+    new_ocean_angle=0
+    uv_angle=0
+    AC=1
+    AD=1
+    CD=1
+    ocean_time=0
+    energy=0
+    pitch_angle=Hudu(30)
+    dive_speed=0.29
+    x_=end_x-start_x
+    y_=end_y-start_y
+    gridv=math.sqrt(math.pow(u, 2) + math.pow(v, 2))
+    xy=math.sqrt(math.pow(x_, 2) + math.pow(y_, 2))
+    if v<0:
+        gridv_angle=-math.acos(u / gridv)
+    else:
+        gridv_angle=math.acos(u / gridv)
+    if y_<0:
+        start_angle1=-math.acos(x_ / xy)
+    else:
+        start_angle1=math.acos(x_ / xy)
+#航向角1方案中的航向角计算完毕
+    anti_gridv_angle=Anti_Hudu(gridv_angle)
+    anti_start_angle1=Anti_Hudu(start_angle1)
+    angle_gridv_start=anti_gridv_angle-anti_start_angle1
+    if angle_gridv_start>180:
+        angle_gridv_start=360-angle_gridv_start
+    if angle_gridv_start<-180:
+        angle_gridv_start=360+angle_gridv_start
+    '''添加航向角抵消上一个点的流场开始'''    
+    gridv_pre=math.sqrt(math.pow(uu, 2) + math.pow(vv, 2))
+    if gridv_pre!=0:
+        if vv<0:
+            gridv_angle_pre=-math.acos(uu / gridv_pre)
+        else:
+            gridv_angle_pre=math.acos(uu / gridv_pre)
+        
+        anti_gridv_angle_pre=Anti_Hudu(gridv_angle_pre)
+        angle_gridv_start_pre=anti_gridv_angle_pre-anti_start_angle1
+        if angle_gridv_start_pre>180:
+            angle_gridv_start_pre=360-angle_gridv_start_pre
+        if angle_gridv_start_pre<-180:
+            angle_gridv_start_pre=360+angle_gridv_start_pre
+        hx_angle_end1=gridv_pre*math.sin(Hudu(angle_gridv_start_pre))/(dive_speed*math.cos(pitch_angle))
+        '''航向角抵消上一个点的流场结束'''
+        angle_abs=Anti_Hudu(abs(math.asin(hx_angle_end1)))
+    else:
+        angle_abs=0
+    anti_gridv_angle=Angle_judge(anti_gridv_angle)
+#    正北化的洋流
+    anti_start_angle1=Angle_judge(anti_start_angle1)
+    
+    if anti_gridv_angle>anti_start_angle1:
+        if anti_gridv_angle-anti_start_angle1>180:
+            hx_angle_end2=anti_start_angle1+angle_abs
+        else:
+            hx_angle_end2=anti_start_angle1-angle_abs
+    else:
+        if anti_start_angle1-anti_gridv_angle>180:
+            hx_angle_end2=anti_start_angle1-angle_abs
+        else:
+            hx_angle_end2=anti_start_angle1+angle_abs
+    start_angle2=Hudu(Anti_angle_judge(hx_angle_end2))
+    '''航向角计算完毕'''
+#    正北化起始角度
+    '''航向角度计算完毕'''
+    dive_u=dive_speed*math.cos(pitch_angle)*math.cos(start_angle2)
+    dive_v=dive_speed*math.cos(pitch_angle)*math.sin(start_angle2)
+    uu=u+dive_u
+    vv=v+dive_v
+    uv=math.sqrt(math.pow(uu,2)+math.pow(vv,2))
+#uu和vv是洋流速度和浮标速度一起的结果，uv_angle是真正朝向的角度
+    if vv>0:
+        uv_angle=math.acos(uu/uv)
+    else:
+        uv_angle=-math.acos(uu/uv)
+#当此处洋流为0时，直接计算中间的路径点
+    if (u==0)and(v==0):
+        ocean_time=2*depth/(math.sin(pitch_angle)*dive_speed)
+        AC1=2*depth/math.sin(pitch_angle)
+        delta_x= AC1 * math.cos(start_angle2)
+        delta_y= AC1 * math.sin(start_angle2)
+        middle_x = start_x + delta_x
+        middle_y = start_y + delta_y
+    else:
+        if y_>0:
+            if v>0:
+                new_ocean_angle=abs(gridv_angle-start_angle2)
+            else:
+                if (abs(gridv_angle)+abs(start_angle2))>π:
+                    new_ocean_angle=2 * π - start_angle2 + gridv_angle
+                else:
+                    new_ocean_angle=start_angle2 - gridv_angle
+        else:
+            if v<0:
+                new_ocean_angle=abs(gridv_angle)-abs(start_angle2)
+            else:
+                if (abs(gridv_angle)+abs(start_angle2))>π:
+                    new_ocean_angle=2 * π + start_angle2 - gridv_angle
+                else:
+                    new_ocean_angle= gridv_angle - start_angle2
+        A=math.pow((2*depth),2)
+        B=math.pow(math.tan(pitch_angle),2)
+        C=math.pow(gridv*math.sin(new_ocean_angle),2)
+        D=math.pow((gridv*math.cos(new_ocean_angle)+dive_speed*math.cos(pitch_angle)),2)
+        AC=2 * depth / math.tan(pitch_angle)
+        ocean_time=math.sqrt(A/(B*(C+D)))
+        #时间计算按ABCD公式计算出来的
+        time= 2 * depth / (math.sin(pitch_angle) * dive_speed)
+
+        CD=gridv*math.sin(new_ocean_angle)*ocean_time
+        AD=(gridv * math.cos(new_ocean_angle) + dive_speed * math.cos(pitch_angle)) \
+        * ocean_time
+        delta_y=AC*math.sin(uv_angle)
+        delta_x=AC*math.cos(uv_angle)
+        '''测试'''
+#        ocean_time1=10800
+#        delta_y1=vv*ocean_time1
+#        delta_x1=uu*ocean_time1
+        '''测试'''
+        y = (gridv * math.sin(gridv_angle) + dive_speed * math.cos(pitch_angle) \
+        * math.sin(start_angle2)) * ocean_time
+        x = (gridv * math.cos(gridv_angle) + dive_speed * math.cos(pitch_angle) \
+        * math.cos(start_angle2)) * ocean_time
+        middle_x=start_x+delta_x
+        middle_y=start_y+delta_y
+    time_end=ocean_time
+    energy = 14.7 * dive_speed *math.pow(ocean_time, 2) / 2000
+    list_waypoint=[]
+    list_waypoint.append(middle_x)
+    list_waypoint.append(middle_y)
+    list_waypoint.append(time_end)
+    list_waypoint.append(energy)
+    return list_waypoint
+'''*****************************结束****智能浮标动力模型**********************************************'''
+#xy转为大地坐标系BL
+def Translate_to_BL(x,y):
+    list_BL=[]
+    D=-y/a
+    B=π/2-2*math.atan(math.pow(math.exp(1),D))
+    L=x/a
+    L=Anti_Hudu(L)
+    B=Anti_Hudu(B)
+    list_BL.append(B)
+    list_BL.append(L)
+    return list_BL
+    
+#大地坐标系BL转为xy
+def Translate_to_XY(B,L):
+    list_XY=[]
+    L=Hudu(L)
+    B=Hudu(B)
+    x=a*L
+    y=a*math.log(math.tan(π/4+B/2))
+    list_XY.append(x)
+    list_XY.append(y)
+    return list_XY
+    
+#弧度转角度
+def Anti_Hudu(x):
+    x=x/(2*π)*360
+    return x
+    
+#角度转弧度
+def Hudu(x):
+    x=x/360*2*π
+    return x
+    
+#角度正北化(-180-180转化为0-360)
+def Angle_judge(angle):
+    if angle>0:
+        if angle>90:
+            angle=360-(angle-90)
+        else:
+            angle=90-angle
+    else:
+        angle=-angle+90
+    return angle
+
+#角度反正北化(0-360转化为-180-180)
+def Anti_angle_judge(angle):
+    if angle>270:
+        angle=450-angle
+    else:
+        angle=90-angle
+    return angle
+       
+#两点间距离计算
+def Distance(lat1,lon1,lat2,lon2):
+    lat1_rad=Hudu(lat1)
+    lon1_rad=Hudu(lon1)
+    lat2_rad=Hudu(lat2)
+    lon2_rad=Hudu(lon2)
+    delta_a=lat1_rad-lat2_rad
+    delta_b=lon1_rad-lon2_rad
+    s=2 * math.asin(math.sqrt(math.pow(math.sin(delta_a / 2), 2) + math.cos(lat1_rad) * math.cos(lat2_rad) * math.pow(math.sin(delta_b / 2), 2)))
+    s=s*6378137
+    return s
+    
+def Choose_oceandata(time1):
+    t1=time1/3600.0
+    t_end=int(t1)
+    return t_end
+    
+def Search_Min(B,L,list_gridv_end):
+    x=0
+    minlat=100
+    minlon=100
+    #对研究区域洋流进行循环查找，返回和当时位置相差最小的位置处的洋流信息
+    for i in range (0,24840):
+        if (minlat>abs(list_gridv_end[i][1]-B) or minlat==abs(list_gridv_end[i][1]-B))and(minlon>abs(list_gridv_end[i][0]-L) or minlon==abs(list_gridv_end[i][0]-L)):
+            minlat=abs(list_gridv_end[i][1]-B)
+            minlon=abs(list_gridv_end[i][0]-L)
+            x=i
+    return x
+    
+def Surfacewaypoint(startB,startL,endB,endL,u,v,uu,vv):
+    '''glider1'''
+    list_surfacewaypoint=[]
+    start_x=Translate_to_XY(startB,startL)[0]
+    start_y=Translate_to_XY(startB,startL)[1]
+    end_x=Translate_to_XY(endB,endL)[0]
+    end_y=Translate_to_XY(endB,endL)[1]
+#    list_model=Power_Model(start_x1,start_y1,end_x1,end_y1,u,v,uu1,vv1,depth)
+#    uu1=u
+#    vv1=v
+    list_model=Power_Model(start_x,start_y,end_x,end_y,u,v,uu,vv)
+    startx=list_model[0]
+    starty=list_model[1]
+    time=list_model[2]
+    Energy=list_model[3]
+    #根据求出的路径点得出新的经纬度，用于判断是否到达目标点  
+    B_middle=Translate_to_BL(startx, starty)[0]
+    L_middle=Translate_to_BL(startx, starty)[1]
+    #更新新的路径点起点用于求下一个路径点  
+    list_surfacewaypoint.append(startB)
+    list_surfacewaypoint.append(startL)
+    list_surfacewaypoint.append(B_middle)
+    list_surfacewaypoint.append(L_middle)
+    list_surfacewaypoint.append(time)
+    list_surfacewaypoint.append(Energy)
+    return list_surfacewaypoint
+    '''glider1'''
+def Drawlines(list_waypoint,ax1):
+    for r2 in range(0,len(list_waypoint)):
+        x21=list_waypoint[r2][0]
+        x22=list_waypoint[r2][1]
+        y21=list_waypoint[r2][2]
+        y22=list_waypoint[r2][3]
+        xx22,xx21=map(x22,x21)
+        yy22,yy21=map(y22,y21)
+        ax1.arrow(xx22, xx21, yy22-xx22, yy21-xx21,
+                 length_includes_head=True,
+                 head_width=0.00005, head_length=0.00005,linewidth=1,color='red')
+    plt.imshow(img,extent=[yy22-0.025,yy22+0.025,yy21-0.008,yy21+0.008],zorder=10) 
+def Drawline(x1,x2,y1,y2,ax1):
+    xx2,xx1=map(x2,x1)
+    yy2,yy1=map(y2,y1)
+    ax1.arrow(xx2, xx1, yy2-xx2, yy1-xx1,
+             length_includes_head=True,
+             head_width=0.001, head_length=0.001,linewidth=2,color='red')
+  
+'''**绘制底图'''  
+
+if __name__ == '__main__':
+    '''区域2_R=0.5时_拓扑2_起始点坐标'''
+    startB1,startL1,endB1,endL1=30.40,150.40,30.20,150.40 
+    startB2,startL2,endB2,endL2=30.20,150.40,30.20,150.20 
+    startB3,startL3,endB3,endL3=30.20,150.20,30.40,150.20
+    startB4,startL4,endB4,endL4=30.40,150.20,30.40,150.40
+    startB10,startL10,endB10,endL10=30.40,150.40,30.20,150.40 
+    startB20,startL20,endB20,endL20=30.20,150.40,30.20,150.20 
+    startB30,startL30,endB30,endL30=30.20,150.20,30.40,150.20
+    startB40,startL40,endB40,endL40=30.40,150.20,30.40,150.40
+
+    depth=100
+    count=0
+    time1,energy1,time2,energy2,time3,energy3,time4,energy4=0,0,0,0,0,0,0,0
+
+    start_x1=Translate_to_XY(startB1,startL1)[0]
+    start_y1=Translate_to_XY(startB1,startL1)[1]
+    end_x1=Translate_to_XY(endB1,endL1)[0]
+    end_y1=Translate_to_XY(endB1,endL1)[1]
+    start_x2=Translate_to_XY(startB2,startL2)[0]
+    start_y2=Translate_to_XY(startB2,startL2)[1]
+    end_x2=Translate_to_XY(endB2,endL2)[0]
+    end_y2=Translate_to_XY(endB2,endL2)[1]
+    start_x3=Translate_to_XY(startB3,startL3)[0]
+    start_y3=Translate_to_XY(startB3,startL3)[1]
+    end_x3=Translate_to_XY(endB3,endL3)[0]
+    end_y3=Translate_to_XY(endB3,endL3)[1]
+    start_x4=Translate_to_XY(startB4,startL4)[0]
+    start_y4=Translate_to_XY(startB4,startL4)[1]
+    end_x4=Translate_to_XY(endB4,endL4)[0]
+    end_y4=Translate_to_XY(endB4,endL4)[1]
+    list_waypoint1=[]
+    list_waypoint2=[]
+    list_waypoint3=[]
+    list_waypoint4=[]
+    list_waypoint11=[]
+    list_waypoint22=[]
+    list_waypoint33=[]
+    list_waypoint44=[]
+    list_gridv_end=[]
+    list_point1=[]
+    list_point2=[]
+    list_point3=[]
+    list_point4=[]
+    Read_data(0)
+    choose_data=0
+    time,timeall=0,0
+    uu1,vv1,uu2,vv2,uu3,vv3,uu4,vv4,u1,v1,u2,v2,u3,v3,u4,v4=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+    uu10,vv10,uu20,vv20,uu30,vv30,uu40,vv40=0,0,0,0,0,0,0,0
+    while time<720000:
+        '''choose ocean data'''
+        choose_data_number=Choose_oceandata(time)
+        if choose_data!=choose_data_number:
+            Read_data(choose_data_number)
+            choose_data=choose_data_number
+        '''choose ocean data'''
+        list_gridv_end=list_gridv
+        '''一个周期'''
+        '''洋流'''
+        index=Search_Min(startB1,startL1,list_gridv_end) 
+        u1=list_gridv_end[index][2]
+        v1=list_gridv_end[index][3]
+        index=Search_Min(startB2,startL2,list_gridv_end) 
+        u2=list_gridv_end[index][2]
+        v2=list_gridv_end[index][3]
+        index=Search_Min(startB3,startL3,list_gridv_end) 
+        u3=list_gridv_end[index][2]
+        v3=list_gridv_end[index][3]
+        index=Search_Min(startB4,startL4,list_gridv_end) 
+        u4=list_gridv_end[index][2]
+        v4=list_gridv_end[index][3]
+        '''glider1'''
+        list_point1=Surfacewaypoint(startB1,startL1,endB1,endL1,u1,v1,uu10,vv10)
+        time1=timeall+list_point1[4]
+        '''glider2'''
+        list_point2=Surfacewaypoint(startB2,startL2,endB2,endL2,u2,v2,uu20,vv20)
+        time2=timeall+list_point2[4]
+        '''glider3'''
+        list_point3=Surfacewaypoint(startB3,startL3,endB3,endL3,u3,v3,uu30,vv30)
+        time3=timeall+list_point3[4]
+        '''glider4'''
+        list_point4=Surfacewaypoint(startB4,startL4,endB4,endL4,u4,v4,uu40,vv40)
+        time4=timeall+list_point4[4]
+#        time=min(time1,time2,time3)
+
+        if (time==max(int(time4),int(time3),int(time2),int(time1))):
+            '''当上一次的最后一个出水的时候，需对下一个循环进行初始化位置，并将起始点的位置进行替换'''
+            '''draw picture'''
+            fig = plt.figure(figsize=(16,16))
+            ax1=fig.add_axes([0.1,0.1,0.8,0.8])
+            map=Basemap(projection = 'cyl',llcrnrlon = 150., llcrnrlat = 30, urcrnrlon = 150.6, urcrnrlat=30.6)
+            map.drawcoastlines()
+            map.drawmapboundary(fill_color='#84c1ff')
+            map.fillcontinents(color='grey')
+            map.drawparallels(np.arange(30.,30.6,0.2),labels=[1,0,0,0],fontsize=15) 
+            map.drawmeridians(np.arange(150.,150.6,0.2),labels=[0,1,0,1],fontsize=15) 
+            x, y = map(lons, lats)
+            level=np.linspace(0.0,0.225,16)
+            cs = map.contourf(x,y,grid,cmap=plt.cm.Blues,levels=level)
+            ax1.quiver(x,y,uu,vv,color='#333333',scale=10,minshaft=3)
+    #            cs = map.contourf(x,y,list_gridv_end,16,cmap=plt.cm.Blues)
+            plt.colorbar(cs)
+            '''draw picture'''
+            '''draw lines'''
+            index=Search_Min(startB1,startL1,list_gridv_end) 
+            u1=list_gridv_end[index][2]
+            v1=list_gridv_end[index][3]
+            '''初始化洋流'''
+            list_point1=Surfacewaypoint(startB1,startL1,endB1,endL1,u1,v1,uu1,vv1)
+            uu1,vv1=u1,v1#记录上一次的洋流用作下次抵消洋流
+            list_waypoint1.append([list_point1[0],list_point1[1],list_point1[2],list_point1[3]])
+            startB1=list_point1[2]
+            startL1=list_point1[3]
+            
+            index=Search_Min(startB1,startL1,list_gridv_end) 
+            u1=list_gridv_end[index][2]
+            v1=list_gridv_end[index][3]
+            list_point11=Surfacewaypoint(startB1,startL1,endB1,endL1,u1,v1,uu1,vv1)
+            uu1,vv1=u1,v1
+            list_waypoint1.append([list_point11[0],list_point11[1],list_point11[2],list_point11[3]])
+            Drawlines(list_waypoint1,ax1)
+            time1=time
+            startB1=list_point11[2]
+            startL1=list_point11[3]
+            
+            '''2'''
+            index=Search_Min(startB2,startL2,list_gridv_end) 
+            u2=list_gridv_end[index][2]
+            v2=list_gridv_end[index][3]
+            list_point2=Surfacewaypoint(startB2,startL2,endB2,endL2,u2,v2,uu2,vv2)
+            uu2,vv2=u2,v2
+            list_waypoint2.append([list_point2[0],list_point2[1],list_point2[2],list_point2[3]])
+            startB2=list_point2[2]
+            startL2=list_point2[3]
+            
+            index=Search_Min(startB2,startL2,list_gridv_end) 
+            u2=list_gridv_end[index][2]
+            v2=list_gridv_end[index][3]
+            list_point22=Surfacewaypoint(startB2,startL2,endB2,endL2,u2,v2,uu2,vv2)
+            uu2,vv2=u2,v2
+            list_waypoint2.append([list_point22[0],list_point22[1],list_point22[2],list_point22[3]])
+            Drawlines(list_waypoint2,ax1)
+            time2=time
+            startB2=list_point22[2]
+            startL2=list_point22[3]
+            
+            '''3'''
+            index=Search_Min(startB3,startL3,list_gridv_end) 
+            u3=list_gridv_end[index][2]
+            v3=list_gridv_end[index][3]
+            list_point3=Surfacewaypoint(startB3,startL3,endB3,endL3,u3,v3,uu3,vv3)
+            uu3,vv3=u3,v3
+            list_waypoint3.append([list_point3[0],list_point3[1],list_point3[2],list_point3[3]])
+            startB3=list_point3[2]
+            startL3=list_point3[3]
+            
+            index=Search_Min(startB3,startL3,list_gridv_end) 
+            u3=list_gridv_end[index][2]
+            v3=list_gridv_end[index][3]
+            list_point33=Surfacewaypoint(startB3,startL3,endB3,endL3,u3,v3,uu3,vv3)
+            uu3,vv3=u3,v3
+            list_waypoint3.append([list_point33[0],list_point33[1],list_point33[2],list_point33[3]])
+            Drawlines(list_waypoint3,ax1)
+            time3=time
+            startB3=list_point33[2]
+            startL3=list_point33[3]
+            
+            '''4'''
+            index=Search_Min(startB4,startL4,list_gridv_end) 
+            u4=list_gridv_end[index][2]
+            v4=list_gridv_end[index][3]
+            list_point4=Surfacewaypoint(startB4,startL4,endB4,endL4,u4,v4,uu4,vv4)
+            uu4,vv4=u4,v4
+            list_waypoint4.append([list_point4[0],list_point4[1],list_point4[2],list_point4[3]])
+            startB4=list_point4[2]
+            startL4=list_point4[3]
+            
+            index=Search_Min(startB4,startL4,list_gridv_end) 
+            u4=list_gridv_end[index][2]
+            v4=list_gridv_end[index][3]
+            list_point44=Surfacewaypoint(startB4,startL4,endB4,endL4,u4,v4,uu4,vv4)
+            uu4,vv4=u4,v4
+            list_waypoint4.append([list_point44[0],list_point44[1],list_point44[2],list_point44[3]])
+            Drawlines(list_waypoint4,ax1)
+            time4=time
+            startB4=list_point44[2]
+            startL4=list_point44[3]
+            
+            timeall=time
+            uu10,vv10,uu20,vv20,uu30,vv30,uu40,vv40=uu1,vv1,uu2,vv2,uu3,vv3,uu4,vv4
+            
+            plt.savefig(os.path.join(r'E:\p_all\18\particle\hx328\\'+str(count)+'.png'),dpi=600)
+            plt.close()  
+            count=count+1
+            del fig,ax1
+            gc.collect()
+            
+            '''draw lines'''
+        time=time+1
+        
+        
+
+            
